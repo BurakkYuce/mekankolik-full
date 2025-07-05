@@ -198,10 +198,10 @@ def delete_comment(
 
 # ✅ Helper function - Business rating güncelleme
 def update_business_rating(db: Session, business_id: int):
-    """Business'ın ortalama rating'ini güncelle"""
+    """Business'in ortalama rating'ini güncelle"""
     try:
         # Business'ın tüm comment'lerinin ortalamasını al
-        avg_rating = db.query(
+        avg_rating = db.query(  
             db.func.avg(models.Comment.rating)
         ).filter(
             models.Comment.business_id == business_id
