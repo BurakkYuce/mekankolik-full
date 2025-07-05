@@ -10,4 +10,4 @@ class ActivityOut(BaseModel):
     timestamp: Optional[datetime] = None  # NULL gelebileceği için
 
     class Config:
-        orm_mode = True
+        from_attributes = True

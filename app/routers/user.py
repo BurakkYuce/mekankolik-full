@@ -7,11 +7,11 @@ from ..schemas.user import EmailUpdateRequest, PasswordChangeRequest, PhoneUpdat
 from ..schemas.comment import CommentOut
 from ..schemas.campaign import CampaignOut, CampaignUsageOut,CampaignAssignmentOut
 from ..schemas.reservation import ReservationOut
-from ..schemas.activity import ActivityOut  # varsa
+from ..schemas.activity import ActivityOut  
 from ..oauth2 import get_current_user
 from pathlib import Path
 from typing import List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta,timezone
 
 
 router = APIRouter(
@@ -96,15 +96,23 @@ def get_my_campaigns(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    CampaignOut = db.query(models.CampaignAssignment).filter(models.CampaignAssignment.user_id == current_user.id).all()
+    assignments = (
+        db.query(models.CampaignAssignment)
+        .filter(models.CampaignAssignment.user_id == current_user.id)
+        .all()
+    )
 
-    # allowed_business_ids'i her kampanya için ekle
-    for CampaignOut in CampaignOut:
-        CampaignOut.allowed_business_ids = [
-            cb.business_id for cb in CampaignOut.allowed_businesses
-        ]
+    campaigns = []
+    for assignment in assignments:
+        campaign = assignment.campaign
+        if campaign:
+            # CampaignOut içindeki allowed_business_ids alanını doldur
+            campaign_out = CampaignOut.model_validate(campaign)
+            campaign_out.allowed_business_ids = [cb.business_id for cb in campaign.allowed_businesses]
+            campaign_out.assignments = [CampaignAssignmentOut.model_validate(assignment)]
+            campaigns.append(campaign_out)
 
-    return CampaignOut  
+    return campaigns
 
 # ✅ KULLANDIĞI KAMPANYALAR
 @router.get("/me/used-campaigns", response_model=List[CampaignUsageOut])
@@ -138,6 +146,7 @@ def user_cancel_reservation(
     current_user: models.User = Depends(get_current_user)
 ):
     try:
+        # Rezervasyonu bul
         reservation = db.query(models.Reservation).filter(
             models.Reservation.id == reservation_id,
             models.Reservation.user_id == current_user.id
@@ -146,14 +155,76 @@ def user_cancel_reservation(
         if not reservation:
             raise HTTPException(status_code=404, detail="Reservation not found")
 
-        if reservation.reservation_time - timedelta(hours=1) <= datetime.utcnow():
-            raise HTTPException(status_code=400, detail="You cannot cancel less than 1 hour before reservation time")
+        # ✅ Durum kontrolü ekle - zaten cancel edilmiş mi?
+        if reservation.status == ReservationStatus.cancelled:
+            raise HTTPException(
+                status_code=400, 
+                detail="Reservation is already cancelled"
+            )
+        
+        # ✅ Completed veya rejected rezervasyonlar cancel edilemez
+        if reservation.status in [ReservationStatus.completed, ReservationStatus.rejected]:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Cannot cancel reservation with status: {reservation.status}"
+            )
 
-        reservation.status = ReservationStatus.cancelled  # Enum ataması
+        # ✅ Zaman kontrolü - 1 saat öncesine kadar iptal edilebilir
+        if reservation.reservation_time - timedelta(hours=1) <= datetime.now(timezone.utc):
+            raise HTTPException(
+                status_code=400, 
+                detail="You cannot cancel less than 1 hour before reservation time"
+            )
+
+        # ✅ Durumu güncelle
+        reservation.status = ReservationStatus.cancelled
         db.commit()
         db.refresh(reservation)
-        return {"detail": "Reservation cancelled successfully"}
+        
+        logger.info(f"Reservation {reservation_id} cancelled by user {current_user.id}")
+        
+        return {
+            "detail": "Reservation cancelled successfully",
+            "reservation_id": reservation_id,
+            "status": reservation.status
+        }
 
+    except HTTPException:
+        # HTTPException'ları olduğu gibi yeniden fırlat
+        raise
     except Exception as e:
-        logger.exception("An error occurred while cancelling reservation ,reservation time already passed or missed")
-        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+        # Beklenmeyen hatalar için
+        logger.exception(f"Unexpected error while cancelling reservation {reservation_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail="An unexpected error occurred while cancelling the reservation"
+        )
+    
+    
+@router.get("/reservations/{reservation_id}/status")
+def get_reservation_status(
+    reservation_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    reservation = db.query(models.Reservation).filter(
+        models.Reservation.id == reservation_id,
+        models.Reservation.user_id == current_user.id
+    ).first()
+    
+    if not reservation:
+        raise HTTPException(status_code=404, detail="Reservation not found")
+    
+    time_until_reservation = reservation.reservation_time - datetime.now(timezone.utc)
+    can_cancel = (
+        reservation.status in [ReservationStatus.pending, ReservationStatus.confirmed] and
+        time_until_reservation > timedelta(hours=1)
+    )
+    
+    return {
+        "reservation_id": reservation_id,
+        "status": reservation.status,
+        "can_cancel": can_cancel,
+        "time_until_reservation": str(time_until_reservation),
+        "reservation_time": reservation.reservation_time
+    }

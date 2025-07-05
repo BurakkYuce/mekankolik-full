@@ -14,6 +14,15 @@ app = FastAPI()
 @app.get("/")
 async def root():
     return {"message": "Hello World"}
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('admin.log'),
+        logging.StreamHandler()
+    ]
+)
 models.Base.metadata.create_all(bind=engine)
 app.include_router(auth.router)
 app.include_router(user.router)

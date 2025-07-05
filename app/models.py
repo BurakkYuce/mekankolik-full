@@ -241,6 +241,7 @@ class CampaignAssignment(Base):
     user = relationship("User", back_populates="assigned_campaigns")
     campaign = relationship("Campaign", back_populates="assignments")
     usages = relationship("CampaignUsage", back_populates="assignment", cascade="all, delete")
+    progress = relationship("CampaignProgress", back_populates="assignment", uselist=False, cascade="all, delete")
 
 class RuleEvaluationLog(Base):
     __tablename__ = "rule_evaluation_logs"
@@ -256,3 +257,25 @@ class RuleEvaluationLog(Base):
     campaign = relationship("Campaign")
 
 
+class CampaignProgress(Base):
+    __tablename__ = "campaign_progress"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    assignment_id = Column(Integer, ForeignKey("campaign_assignments.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    campaign_id = Column(Integer, ForeignKey("campaigns.id"), nullable=False)
+    
+    # Progress counters
+    comments_made = Column(Integer, default=0)
+    reservations_made = Column(Integer, default=0)
+    businesses_visited = Column(Integer, default=0)
+    total_spend = Column(Float, default=0.0)
+    
+    # Tracking
+    last_updated = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    # İlişkiler
+    assignment = relationship("CampaignAssignment", back_populates="progress")
+    user = relationship("User")
+    campaign = relationship("Campaign")
